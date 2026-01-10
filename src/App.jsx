@@ -2,226 +2,215 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from './firebaseConfig';
 import { ref, set, onValue, update, get } from "firebase/database";
 
-const ROOM_ID = "ROOM_001"; 
-const GAME_TIME = 180; 
+const ROOM_ID = "ROOM_001";
 
 export default function App() {
   const [role, setRole] = useState(null); 
   const [roomData, setRoomData] = useState(null);
-  const roomDataRef = useRef(null);
+  const [inputText, setInputText] = useState("");
+  const [gameMode, setGameMode] = useState("simultaneous"); // simultaneous, turn-based
 
   useEffect(() => {
-    const roomRef = ref(db, `rooms/${ROOM_ID}`);
-    return onValue(roomRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        setRoomData(data);
-        roomDataRef.current = data;
-      } else {
-        set(roomRef, { state: 'LOBBY', score: 0, timeLeft: GAME_TIME, sensor: { b: 0, base: 0 } });
-      }
-    });
+    return onValue(ref(db, `rooms/${ROOM_ID}`), (s) => s.exists() && setRoomData(s.val()));
   }, []);
 
-  const startGame = async () => {
-    const snapshot = await get(ref(db, 'question_pool'));
-    if (!snapshot.exists()) return alert("請先匯入題庫！");
-    let pool = Object.values(snapshot.val());
-    const shuffled = pool.sort(() => Math.random() - 0.5);
-    await update(ref(db, `rooms/${ROOM_ID}`), {
-      state: 'PLAYING', queue: shuffled, currentIndex: 0,
-      score: 0, history: [], timeLeft: GAME_TIME
+  // --- 老師邏輯：隨機分組與抽籤 ---
+  const handleCreateTeams = async () => {
+    const names = inputText.split(/[\s,]+/).filter(n => n.trim());
+    if (names.length < 2) return alert("請輸入至少兩個名字");
+
+    const shuffled = names.sort(() => Math.random() - 0.5);
+    const newTeams = {};
+    for (let i = 0; i < shuffled.length; i += 2) {
+      const teamId = `team_${i/2 + 1}`;
+      const members = shuffled.slice(i, i + 2);
+      newTeams[teamId] = {
+        id: teamId,
+        name: `第 ${i/2 + 1} 組`,
+        members: members,
+        guesser: members[0],
+        describer: members[1] || members[0],
+        score: 0,
+        currentIndex: 0,
+        history: [],
+        state: 'IDLE'
+      };
+    }
+
+    await set(ref(db, `rooms/${ROOM_ID}`), {
+      teams: newTeams,
+      state: 'TEAMS_READY',
+      config: { mode: gameMode, timeLimit: 180 },
+      timeLeft: 180
     });
+  };
+
+  // --- 老師邏輯：啟動遊戲 ---
+  const handleStartMaster = async () => {
+    const snapshot = await get(ref(db, 'question_pool'));
+    const pool = Object.values(snapshot.val());
+    
+    if (gameMode === 'simultaneous') {
+      // 同步模式：生成一組共同題庫
+      const commonQueue = pool.sort(() => Math.random() - 0.5);
+      await update(ref(db, `rooms/${ROOM_ID}`), {
+        state: 'PLAYING',
+        commonQueue: commonQueue,
+        timeLeft: 180,
+        startTime: Date.now()
+      });
+    } else {
+      // 輪流模式：僅更改狀態，各組開始時才各自抓題
+      await update(ref(db, `rooms/${ROOM_ID}`), { state: 'PLAYING', timeLeft: 180 });
+    }
   };
 
   if (!role) {
     return (
       <div style={layoutStyle}>
-        <h1 style={{color: '#1890ff', marginBottom: '40px'}}>台灣史「你講我猜」最終調校版</h1>
-        <button style={bigBtn} onClick={() => setRole('projector')}>💻 我是投影幕</button>
-        <button style={bigBtn} onClick={() => setRole('player')}>📱 我是猜題者</button>
+        <h1>台灣史「你講我猜」</h1>
+        <button style={bigBtn} onClick={() => setRole('admin')}>👨‍🏫 老師管理後台</button>
+        <button style={bigBtn} onClick={() => setRole('projector')}>📺 投影幕排行榜</button>
+        <button style={bigBtn} onClick={() => setRole('player')}>📱 學生手機端</button>
       </div>
     );
   }
 
-  return role === 'projector' ? 
-    <ProjectorView roomData={roomData} startGame={startGame} /> : 
-    <PlayerView roomDataRef={roomDataRef} />;
+  // --- 角色分流 ---
+  if (role === 'admin') return <AdminView roomData={roomData} inputText={inputText} setInputText={setInputText} gameMode={gameMode} setGameMode={setGameMode} handleCreateTeams={handleCreateTeams} handleStartMaster={handleStartMaster} />;
+  if (role === 'projector') return <ProjectorView roomData={roomData} />;
+  if (role === 'player') return <PlayerView roomData={roomData} />;
 }
 
-// --- 投影幕組件 ---
-function ProjectorView({ roomData, startGame }) {
+// --- 1. 老師管理介面 ---
+function AdminView({ roomData, inputText, setInputText, gameMode, setGameMode, handleCreateTeams, handleStartMaster }) {
+  return (
+    <div style={layoutStyle}>
+      <h2>老師控制台</h2>
+      <div style={cardStyle}>
+        <p>1. 選擇模式： 
+          <select value={gameMode} onChange={(e) => setGameMode(e.target.value)}>
+            <option value="simultaneous">全體同步比賽 (同一套題)</option>
+            <option value="turn-based">輪流分組比賽 (不同題庫)</option>
+          </select>
+        </p>
+        <textarea placeholder="貼上名單..." style={{width: '100%', height: '80px'}} value={inputText} onChange={(e) => setInputText(e.target.value)} />
+        <button style={btnStyle} onClick={handleCreateTeams}>隨機分組並抽人</button>
+      </div>
+      
+      {roomData?.state === 'TEAMS_READY' && (
+        <button style={{...btnStyle, backgroundColor: '#f5222d', fontSize: '24px'}} onClick={handleStartMaster}>
+          🚀 按此開始計時 (180秒)
+        </button>
+      )}
+      <button onClick={() => update(ref(db, `rooms/${ROOM_ID}`), {state: 'LOBBY', teams: null})} style={{fontSize: '12px', marginTop: '20px'}}>重置所有資料</button>
+    </div>
+  );
+}
+
+// --- 2. 投影幕排行榜 (動態長條圖) ---
+function ProjectorView({ roomData }) {
+  const [timer, setTimer] = useState(180);
+
   useEffect(() => {
-    let timer;
+    let interval;
     if (roomData?.state === 'PLAYING' && roomData.timeLeft > 0) {
-      timer = setInterval(() => {
+      interval = setInterval(() => {
         update(ref(db, `rooms/${ROOM_ID}`), { timeLeft: roomData.timeLeft - 1 });
       }, 1000);
-    } else if (roomData?.timeLeft === 0 && roomData.state === 'PLAYING') {
-      update(ref(db, `rooms/${ROOM_ID}`), { state: 'ENDED' });
     }
-    return () => clearInterval(timer);
+    return () => clearInterval(interval);
   }, [roomData?.state, roomData?.timeLeft]);
 
-  if (!roomData || roomData.state === 'LOBBY') {
-    return (
-      <div style={layoutStyle}>
-        <h1>準備開始遊戲</h1>
-        <div style={sensorMonitor}>
-          基準值: {roomData?.sensor?.base || 0} | 當前 Beta: {roomData?.sensor?.b || 0}
-        </div>
-        <button style={btnStyle} onClick={startGame}>開始新回合</button>
-      </div>
-    );
-  }
-
-  if (roomData.state === 'ENDED') {
-    return (
-      <div style={layoutStyle}>
-        <h1>結束！得分：{roomData.score}</h1>
-        <div style={historyBox}>{roomData.history?.map((h, i) => (<div key={i}>● {h.q} ({h.type})</div>))}</div>
-        <button style={btnStyle} onClick={startGame}>再玩一局</button>
-      </div>
-    );
-  }
-
-  const currentQ = roomData.queue?.[roomData.currentIndex];
-  const relative = (roomData.sensor?.b - roomData.sensor?.base) || 0;
+  const teams = roomData?.teams ? Object.values(roomData.teams) : [];
+  const maxScore = Math.max(...teams.map(t => t.score), 10);
 
   return (
-    <div style={{ ...layoutStyle, backgroundColor: '#000', color: '#fff' }}>
-      <div style={{ position: 'absolute', top: '20px', display: 'flex', gap: '30px', fontSize: '20px' }}>
-        <span>時間：{roomData.timeLeft}s</span>
-        <span>得分：{roomData.score}</span>
-        <span style={{color: '#0f0'}}>基準: {roomData.sensor?.base} | 當前: {roomData.sensor?.b} | 相對: {relative.toFixed(1)}</span>
+    <div style={{...layoutStyle, justifyContent: 'flex-start', paddingTop: '50px'}}>
+      <div style={{fontSize: '48px', fontWeight: 'bold'}}>倒數計時：{roomData?.timeLeft}s</div>
+      <div style={chartContainer}>
+        {teams.map((t, i) => (
+          <div key={i} style={chartRow}>
+            <div style={teamLabel}>{t.name}<br/><small>{t.guesser}</small></div>
+            <div style={barWrapper}>
+              <div style={{...bar, width: `${(t.score / maxScore) * 80}%`}}>
+                <span style={scoreLabel}>{t.score} 分</span>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
-      <h1 style={{ fontSize: '180px', margin: '20px 0' }}>{currentQ?.term}</h1>
-      <p style={{ fontSize: '40px', color: '#888' }}>({currentQ?.category})</p>
+      {roomData?.state === 'ENDED' && <h1>🏁 遊戲結束！</h1>}
     </div>
   );
 }
 
-// --- 手機猜題者組件 ---
-function PlayerView({ roomDataRef }) {
-  const [isGyroEnabled, setIsGyroEnabled] = useState(false);
-  const [readyToTrigger, setReadyToTrigger] = useState(true);
-  const [currentB, setCurrentB] = useState(0);
-  
-  const baseRef = useRef(0);
-  const readyRef = useRef(true);
-  const lastSyncRef = useRef(0);
+// --- 3. 學生手機端 ---
+function PlayerView({ roomData }) {
+  const [myTeamId, setMyTeamId] = useState(null);
 
-  // 處理 0 與 -179 的角度跳轉數學
-  const getDiff = (cur, ref) => {
-    let d = cur - ref;
-    if (d > 180) d -= 360;
-    if (d < -180) d += 360;
-    return d;
-  };
-
-  const handleMotion = (e) => {
-    const b = e.beta || 0;
-    const now = Date.now();
-
-    // 同步到 Firebase 供大螢幕監看
-    if (now - lastSyncRef.current > 300) {
-      update(ref(db, `rooms/${ROOM_ID}/sensor`), { b: b.toFixed(1) });
-      lastSyncRef.current = now;
-    }
-    setCurrentB(b.toFixed(1));
-
-    if (!isGyroEnabled) return;
-
-    // 計算相對標準值的位移
-    const diff = getDiff(b, baseRef.current);
-
-    // 防呆中立區判定：只要在 -2 到 +2 之間，就恢復觸發資格
-    if (Math.abs(diff) <= 2) {
-      readyRef.current = true;
-      setReadyToTrigger(true);
-      return;
-    }
-
-    // 觸發判定
-    const data = roomDataRef.current;
-    if (!readyRef.current || !data || data.state !== 'PLAYING') return;
-
-    if (diff < -3) { // 點頭得分
-      submitAction('正確');
-    } else if (diff > 2) { // 仰頭跳過
-      submitAction('跳過');
-    }
-  };
-
-  const submitAction = async (type) => {
-    readyRef.current = false; // 鎖定直到回到中立區
-    setReadyToTrigger(false);
-
-    const data = roomDataRef.current;
-    if (!data?.queue) return;
-
-    const nextIndex = data.currentIndex + 1;
-    const currentQ = data.queue[data.currentIndex];
-    const newHistory = [...(data.history || []), { q: currentQ.term, type: type }];
+  const handleScore = async (type) => {
+    const team = roomData.teams[myTeamId];
+    const nextIndex = team.currentIndex + 1;
+    const currentQ = (roomData.config.mode === 'simultaneous' ? roomData.commonQueue : team.teamQueue)[team.currentIndex];
     
-    await update(ref(db, `rooms/${ROOM_ID}`), {
-      currentIndex: nextIndex,
-      score: type === '正確' ? data.score + 1 : data.score,
-      history: newHistory,
-      state: nextIndex >= data.queue.length ? 'ENDED' : 'PLAYING'
-    });
+    const updates = {};
+    updates[`rooms/${ROOM_ID}/teams/${myTeamId}/score`] = type === '正確' ? team.score + 1 : team.score;
+    updates[`rooms/${ROOM_ID}/teams/${myTeamId}/currentIndex`] = nextIndex;
+    const history = [...(team.history || []), { q: currentQ.term, type }];
+    updates[`rooms/${ROOM_ID}/teams/${myTeamId}/history`] = history;
+
+    update(ref(db), updates);
   };
 
-  const startGyro = () => {
-    if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
-      DeviceOrientationEvent.requestPermission().then(s => {
-        if (s === 'granted') {
-          window.addEventListener('deviceorientation', handleMotion, true);
-          // 紀錄當前角度為校正基準
-          setTimeout(() => {
-            const currentBeta = parseFloat(currentB);
-            baseRef.current = currentBeta;
-            update(ref(db, `rooms/${ROOM_ID}/sensor`), { base: currentBeta.toFixed(1) });
-            setIsGyroEnabled(true);
-          }, 500);
-        }
-      });
-    } else {
-      window.addEventListener('deviceorientation', handleMotion, true);
-      setIsGyroEnabled(true);
+  const joinTeam = async (tid) => {
+    if (roomData.config.mode === 'turn-based') {
+      // 輪流模式：加入時才幫該組抽題庫
+      const snapshot = await get(ref(db, 'question_pool'));
+      const pool = Object.values(snapshot.val()).sort(() => Math.random() - 0.5);
+      update(ref(db, `rooms/${ROOM_ID}/teams/${tid}`), { teamQueue: pool });
     }
+    setMyTeamId(tid);
   };
 
-  const data = roomDataRef.current;
-  const currentQ = data?.queue?.[data?.currentIndex];
+  if (!myTeamId) {
+    return (
+      <div style={layoutStyle}>
+        <h3>選擇你的組別</h3>
+        {roomData?.teams ? Object.entries(roomData.teams).map(([id, t]) => (
+          <button key={id} style={bigBtn} onClick={() => joinTeam(id)}>{t.name} ({t.guesser})</button>
+        )) : "等待老師分組中..."}
+      </div>
+    );
+  }
+
+  const team = roomData.teams[myTeamId];
+  const queue = roomData.config.mode === 'simultaneous' ? roomData.commonQueue : team.teamQueue;
+  const currentQ = queue ? queue[team.currentIndex] : null;
+
+  if (roomData.state !== 'PLAYING') return <div style={layoutStyle}><h2>等待老師開始遊戲...</h2></div>;
+  if (!currentQ) return <div style={layoutStyle}><h2>題目用完了！</h2></div>;
 
   return (
-    <div style={{ ...layoutStyle, backgroundColor: readyToTrigger ? '#1890ff' : '#444', color: '#fff' }}>
-      {!isGyroEnabled ? (
-        <button style={btnStyle} onClick={startGyro}>啟動感應並校正</button>
-      ) : (
-        <div style={layoutStyle}>
-          <h2 style={{fontSize: '40px'}}>{currentQ?.term || "等待開始"}</h2>
-          <div style={{marginTop: '20px', fontSize: '18px'}}>
-            相對基準位移: {(getDiff(currentB, baseRef.current)).toFixed(1)}°
-          </div>
-          <p style={{opacity: readyToTrigger ? 1 : 0.3}}>
-            {readyToTrigger ? "手機放在額頭" : "請回正手機..."}
-          </p>
-          <div style={{marginTop: '40px', display: 'flex', gap: '20px'}}>
-            <button style={smallBtn} onClick={() => submitAction('正確')}>手動正確</button>
-            <button style={smallBtn} onClick={() => submitAction('跳過')}>手動跳過</button>
-          </div>
-        </div>
-      )}
+    <div style={{...layoutStyle, backgroundColor: '#1890ff', color: '#fff'}}>
+      <h1 style={{fontSize: '48px'}}>{currentQ.term}</h1>
+      <p>你是 {team.guesser}，加油！</p>
+      <div style={{display: 'flex', gap: '20px', marginTop: '50px'}}>
+        <button style={{...bigBtn, backgroundColor: '#52c41a'}} onClick={() => handleScore('正確')}>正確 ✅</button>
+        <button style={{...bigBtn, backgroundColor: '#ff4d4f'}} onClick={() => handleScore('跳過')}>跳過 ⏩</button>
+      </div>
     </div>
   );
 }
 
-// --- 樣式 ---
-const layoutStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '20px', overflow: 'hidden' };
-const bigBtn = { padding: '25px 50px', fontSize: '24px', margin: '15px', borderRadius: '15px', border: 'none', backgroundColor: '#1890ff', color: '#fff', cursor: 'pointer' };
-const btnStyle = { padding: '15px 40px', fontSize: '20px', borderRadius: '10px', cursor: 'pointer', border: 'none', backgroundColor: '#28a745', color: '#fff' };
-const smallBtn = { padding: '15px 25px', fontSize: '16px', borderRadius: '8px', border: 'none', backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff' };
-const historyBox = { maxHeight: '40vh', overflowY: 'auto', backgroundColor: '#eee', padding: '20px', borderRadius: '10px', width: '80%', color: '#333' };
-const sensorMonitor = { backgroundColor: '#333', color: '#0f0', padding: '10px', margin: '20px', borderRadius: '5px', fontFamily: 'monospace' };
+// --- 樣式定義 ---
+const layoutStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', minHeight: '100vh', textAlign: 'center', padding: '20px', fontFamily: 'system-ui' };
+const bigBtn = { padding: '20px', fontSize: '20px', margin: '10px', borderRadius: '12px', border: 'none', color: '#fff', backgroundColor: '#1890ff', cursor: 'pointer', width: '250px' };
+const btnStyle = { padding: '15px 30px', fontSize: '18px', margin: '10px', borderRadius: '8px', border: 'none', backgroundColor: '#52c41a', color: '#fff', cursor: 'pointer' };
+const cardStyle = { backgroundColor: '#f0f2f5', padding: '20px', borderRadius: '12px', width: '90%', maxWidth: '500px', marginBottom: '20px' };
+const chartContainer = { width: '80%', marginTop: '50px', textAlign: 'left' };
+const chartRow = { display: 'flex', alignItems: 'center', marginBottom: '20px', height: '60px' };
+const teamLabel = { width: '150px', fontSize: '20px', fontWeight: 'bold', textAlign: 'right', paddingRight: '20px' };
+const barWrapper = { flex: 1, backgroundColor: '#eee', height: '40px', borderRadius: '20px', overflow: 'hidden', position: 'relative' };
+const bar = { height: '100%', backgroundColor: '#1890ff', transition: 'width 0.5s ease-out', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '15px' };
+const scoreLabel = { color: '#fff', fontWeight: 'bold' };
