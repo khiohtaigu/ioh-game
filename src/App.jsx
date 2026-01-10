@@ -18,7 +18,7 @@ export default function App() {
         setRoomData(data);
         roomDataRef.current = data;
       } else {
-        set(roomRef, { state: 'LOBBY', score: 0, timeLeft: GAME_TIME, sensor: { b: 0, g: 0 } });
+        set(roomRef, { state: 'LOBBY', score: 0, timeLeft: GAME_TIME, sensor: { b: 0, base: 0 } });
       }
     });
   }, []);
@@ -37,7 +37,7 @@ export default function App() {
   if (!role) {
     return (
       <div style={layoutStyle}>
-        <h1 style={{color: '#1890ff', marginBottom: '40px'}}>台灣史「你講我猜」v3.0</h1>
+        <h1 style={{color: '#1890ff', marginBottom: '40px'}}>台灣史「你講我猜」最終調校版</h1>
         <button style={bigBtn} onClick={() => setRole('projector')}>💻 我是投影幕</button>
         <button style={bigBtn} onClick={() => setRole('player')}>📱 我是猜題者</button>
       </div>
@@ -49,7 +49,7 @@ export default function App() {
     <PlayerView roomDataRef={roomDataRef} />;
 }
 
-// --- 投影幕組件 (新增感應器監控) ---
+// --- 投影幕組件 ---
 function ProjectorView({ roomData, startGame }) {
   useEffect(() => {
     let timer;
@@ -68,8 +68,7 @@ function ProjectorView({ roomData, startGame }) {
       <div style={layoutStyle}>
         <h1>準備開始遊戲</h1>
         <div style={sensorMonitor}>
-          手機即時連線狀態：<br/>
-          Beta: {roomData?.sensor?.b || 0} | Gamma: {roomData?.sensor?.g || 0}
+          基準值: {roomData?.sensor?.base || 0} | 當前 Beta: {roomData?.sensor?.b || 0}
         </div>
         <button style={btnStyle} onClick={startGame}>開始新回合</button>
       </div>
@@ -87,29 +86,32 @@ function ProjectorView({ roomData, startGame }) {
   }
 
   const currentQ = roomData.queue?.[roomData.currentIndex];
+  const relative = (roomData.sensor?.b - roomData.sensor?.base) || 0;
+
   return (
     <div style={{ ...layoutStyle, backgroundColor: '#000', color: '#fff' }}>
-      <div style={{ position: 'absolute', top: '20px', display: 'flex', gap: '50px', fontSize: '24px' }}>
+      <div style={{ position: 'absolute', top: '20px', display: 'flex', gap: '30px', fontSize: '20px' }}>
         <span>時間：{roomData.timeLeft}s</span>
-        <span>分數：{roomData.score}</span>
-        <span style={{ color: '#0f0' }}>手機 Beta: {roomData.sensor?.b}</span>
+        <span>得分：{roomData.score}</span>
+        <span style={{color: '#0f0'}}>基準: {roomData.sensor?.base} | 當前: {roomData.sensor?.b} | 相對: {relative.toFixed(1)}</span>
       </div>
       <h1 style={{ fontSize: '180px', margin: '20px 0' }}>{currentQ?.term}</h1>
-      <p style={{ fontSize: '40px', color: '#888' }}>主題：{currentQ?.category}</p>
+      <p style={{ fontSize: '40px', color: '#888' }}>({currentQ?.category})</p>
     </div>
   );
 }
 
-// --- 手機猜題者組件 (新增同步功能) ---
+// --- 手機猜題者組件 ---
 function PlayerView({ roomDataRef }) {
   const [isGyroEnabled, setIsGyroEnabled] = useState(false);
   const [readyToTrigger, setReadyToTrigger] = useState(true);
-  const [localAngles, setLocalAngles] = useState({ b: 0, g: 0 });
+  const [currentB, setCurrentB] = useState(0);
   
-  const baseBetaRef = useRef(0);
+  const baseRef = useRef(0);
   const readyRef = useRef(true);
-  const lastUpdateRef = useRef(0);
+  const lastSyncRef = useRef(0);
 
+  // 處理 0 與 -179 的角度跳轉數學
   const getDiff = (cur, ref) => {
     let d = cur - ref;
     if (d > 180) d -= 360;
@@ -119,44 +121,40 @@ function PlayerView({ roomDataRef }) {
 
   const handleMotion = (e) => {
     const b = e.beta || 0;
-    const g = e.gamma || 0;
     const now = Date.now();
 
-    // 每一秒同步一次數值到電腦大螢幕 (降低流量負荷)
-    if (now - lastUpdateRef.current > 500) {
-      update(ref(db, `rooms/${ROOM_ID}/sensor`), { b: b.toFixed(0), g: g.toFixed(0) });
-      lastUpdateRef.current = now;
+    // 同步到 Firebase 供大螢幕監看
+    if (now - lastSyncRef.current > 300) {
+      update(ref(db, `rooms/${ROOM_ID}/sensor`), { b: b.toFixed(1) });
+      lastSyncRef.current = now;
     }
-    setLocalAngles({ b: b.toFixed(0), g: g.toFixed(0) });
+    setCurrentB(b.toFixed(1));
 
     if (!isGyroEnabled) return;
 
-    // 計算相對位移
-    const diffB = getDiff(b, baseBetaRef.current);
+    // 計算相對標準值的位移
+    const diff = getDiff(b, baseRef.current);
 
-    // 回正判定 (門檻設為 15 度)
-    if (Math.abs(diffB) < 15) {
+    // 防呆中立區判定：只要在 -2 到 +2 之間，就恢復觸發資格
+    if (Math.abs(diff) <= 2) {
       readyRef.current = true;
       setReadyToTrigger(true);
       return;
     }
 
-    // 觸發判定 (針對你的數據：仰角 81->75 = -6, 點頭 81->-70 = -151)
-    // 發現兩者都是負向變動，這裡改用較靈敏的相對判定
-    if (!readyRef.current || roomDataRef.current?.state !== 'PLAYING') return;
+    // 觸發判定
+    const data = roomDataRef.current;
+    if (!readyRef.current || !data || data.state !== 'PLAYING') return;
 
-    // 點頭判定：向下大幅移動
-    if (diffB < -40) {
+    if (diff < -3) { // 點頭得分
       submitAction('正確');
-    } 
-    // 仰角判定：向上輕微移動 (你的數據顯示 81->75 只有 6 度差，我們設 5 度試試)
-    else if (diffB > 0 && diffB < 15) { 
-       // 這裡暫時維持原判斷，等你在大螢幕看到數值後我們再微調
+    } else if (diff > 2) { // 仰頭跳過
+      submitAction('跳過');
     }
   };
 
   const submitAction = async (type) => {
-    readyRef.current = false;
+    readyRef.current = false; // 鎖定直到回到中立區
     setReadyToTrigger(false);
 
     const data = roomDataRef.current;
@@ -179,10 +177,13 @@ function PlayerView({ roomDataRef }) {
       DeviceOrientationEvent.requestPermission().then(s => {
         if (s === 'granted') {
           window.addEventListener('deviceorientation', handleMotion, true);
+          // 紀錄當前角度為校正基準
           setTimeout(() => {
-            baseBetaRef.current = parseFloat(localAngles.b);
+            const currentBeta = parseFloat(currentB);
+            baseRef.current = currentBeta;
+            update(ref(db, `rooms/${ROOM_ID}/sensor`), { base: currentBeta.toFixed(1) });
             setIsGyroEnabled(true);
-          }, 1000);
+          }, 500);
         }
       });
     } else {
@@ -191,17 +192,25 @@ function PlayerView({ roomDataRef }) {
     }
   };
 
+  const data = roomDataRef.current;
+  const currentQ = data?.queue?.[data?.currentIndex];
+
   return (
     <div style={{ ...layoutStyle, backgroundColor: readyToTrigger ? '#1890ff' : '#444', color: '#fff' }}>
       {!isGyroEnabled ? (
-        <button style={btnStyle} onClick={startGyro}>啟動並同步感應器</button>
+        <button style={btnStyle} onClick={startGyro}>啟動感應並校正</button>
       ) : (
         <div style={layoutStyle}>
-          <h2>{roomDataRef.current?.queue?.[roomDataRef.current?.currentIndex]?.term || "等待開始"}</h2>
-          <div style={{marginTop: '20px'}}>Beta: {localAngles.b} | 基準: {baseBetaRef.current}</div>
+          <h2 style={{fontSize: '40px'}}>{currentQ?.term || "等待開始"}</h2>
+          <div style={{marginTop: '20px', fontSize: '18px'}}>
+            相對基準位移: {(getDiff(currentB, baseRef.current)).toFixed(1)}°
+          </div>
+          <p style={{opacity: readyToTrigger ? 1 : 0.3}}>
+            {readyToTrigger ? "手機放在額頭" : "請回正手機..."}
+          </p>
           <div style={{marginTop: '40px', display: 'flex', gap: '20px'}}>
-            <button style={smallBtn} onClick={() => submitAction('正確')}>正確</button>
-            <button style={smallBtn} onClick={() => submitAction('跳過')}>跳過</button>
+            <button style={smallBtn} onClick={() => submitAction('正確')}>手動正確</button>
+            <button style={smallBtn} onClick={() => submitAction('跳過')}>手動跳過</button>
           </div>
         </div>
       )}
@@ -213,6 +222,6 @@ function PlayerView({ roomDataRef }) {
 const layoutStyle = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', padding: '20px', overflow: 'hidden' };
 const bigBtn = { padding: '25px 50px', fontSize: '24px', margin: '15px', borderRadius: '15px', border: 'none', backgroundColor: '#1890ff', color: '#fff', cursor: 'pointer' };
 const btnStyle = { padding: '15px 40px', fontSize: '20px', borderRadius: '10px', cursor: 'pointer', border: 'none', backgroundColor: '#28a745', color: '#fff' };
-const smallBtn = { padding: '20px 30px', fontSize: '20px', borderRadius: '10px', border: 'none', backgroundColor: 'rgba(255,255,255,0.3)', color: '#fff' };
+const smallBtn = { padding: '15px 25px', fontSize: '16px', borderRadius: '8px', border: 'none', backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff' };
 const historyBox = { maxHeight: '40vh', overflowY: 'auto', backgroundColor: '#eee', padding: '20px', borderRadius: '10px', width: '80%', color: '#333' };
 const sensorMonitor = { backgroundColor: '#333', color: '#0f0', padding: '10px', margin: '20px', borderRadius: '5px', fontFamily: 'monospace' };
