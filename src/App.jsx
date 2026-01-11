@@ -34,7 +34,7 @@ export default function App() {
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.muted = isMuted;
-      audioRef.current.volume = 0.4; // 設定初始音量
+      audioRef.current.volume = 0.4;
     }
   }, [isMuted]);
 
@@ -63,10 +63,12 @@ export default function App() {
           <h1 style={responsiveMainTitle}>你講我臆</h1>
           <button style={startBtn} onClick={() => {
             setView('SUBJECT');
-            if (audioRef.current) audioRef.current.play().catch(() => {}); 
-          }}>開始點按 ➔</button>
+            if (audioRef.current) {
+              audioRef.current.play().catch(e => console.log("Audio play failed:", e));
+            }
+          }}>開始挑戰 ➔</button>
         </div>
-        <button style={adminEntryBtn} onClick={() => setView('ADMIN')}>⚙️ 題庫匯入</button>
+        <button style={adminEntryBtn} onClick={() => setView('ADMIN')}>⚙️</button>
         <VolumeControl />
       </div>
     );
@@ -127,9 +129,9 @@ export default function App() {
 
   return (
     <div style={{fontFamily: FONT_FAMILY, color: COLORS.text, overflowX: 'hidden'}}>
-      {/* 使用 8-bit / 遊戲風格的背景音樂連結 */}
-      <audio ref={audioRef} loop>
-        <source src="https://files.freemusicarchive.org/storage-freemusicarchive-org/music/no_curator/RoccoW/Weekly_Beats_2014/RoccoW_-_Weekly_Beats_2014_05_-_Chip_On_Your_Shoulder.mp3" type="audio/mpeg" />
+      {/* 活潑輕快遊戲風格背景音樂 (8-bit + Medieval) */}
+      <audio ref={audioRef} loop crossOrigin="anonymous">
+        <source src="https://cdn.pixabay.com/audio/2024/05/22/audio_349d5c464e.mp3" type="audio/mpeg" />
       </audio>
       {renderContent()}
     </div>
@@ -163,14 +165,14 @@ function AdminView({ onBack }) {
     <div style={lobbyContainer}>
       <div style={glassCard}>
         <h2>⚙️ 題庫管理</h2>
-        <input type="file" accept=".xlsx" onChange={handleFileUpload} style={{margin: '20px 0', width: '100%'}} />
+        <input type="file" accept=".xlsx" onChange={handleFileUpload} style={{margin: '20px 0'}} />
         <button style={backLink} onClick={onBack}>← 返回</button>
       </div>
     </div>
   );
 }
 
-// --- 2. 投影幕組件 ---
+// --- 2. 投影幕組件 (PC端 - 強化佈局防護) ---
 function ProjectorView({ roomData, resetSystem, volumeComp }) {
   const [tempSettings, setTempSettings] = useState({ rounds: 3, time: 180, dup: false });
 
@@ -207,7 +209,7 @@ function ProjectorView({ roomData, resetSystem, volumeComp }) {
           <h2 style={{...subTitle, color: COLORS.red}}>初始設定</h2>
           <div style={settingRow}><span>總回合</span><input type="number" style={inputStyle} value={tempSettings.rounds} onChange={e=>setTempSettings({...tempSettings, rounds: parseInt(e.target.value)})} /></div>
           <div style={settingRow}><span>秒數</span><input type="number" style={inputStyle} value={tempSettings.time} onChange={e=>setTempSettings({...tempSettings, time: parseInt(e.target.value)})} /></div>
-          <label style={{display: 'block', margin: '15px 0'}}><input type="checkbox" checked={tempSettings.dup} onChange={e=>setTempSettings({...tempSettings, dup: e.target.checked})} /> 允許題目重複</label>
+          <label style={{display: 'block', margin: '20px 0'}}><input type="checkbox" checked={tempSettings.dup} onChange={e=>setTempSettings({...tempSettings, dup: e.target.checked})} /> 允許重複</label>
           <button style={{...startBtn, background: COLORS.green}} onClick={() => update(ref(db, `rooms/${ROOM_ID}`), { state: 'LOBBY', totalRounds: tempSettings.rounds, timePerRound: tempSettings.time, allowDuplicate: tempSettings.dup })}>儲存設定</button>
         </div>
         {volumeComp}
@@ -221,9 +223,11 @@ function ProjectorView({ roomData, resetSystem, volumeComp }) {
       return (
         <div style={lobbyContainer}>
           <div style={glassCard}>
-            <h1 style={{fontSize: '32px', color: COLORS.red}}>🏆 總成績</h1>
-            {roomData.roundScores?.map((r, i) => <div key={i}>第 {r.round} 輪：{r.score} 分</div>)}
-            <h2 style={{fontSize: '48px', color: COLORS.green}}>總分：{total}</h2>
+            <h1 style={{fontSize: '48px', color: COLORS.red}}>🏆 總成績結算</h1>
+            <div style={{margin: '30px 0'}}>
+              {roomData.roundScores?.map((r, i) => <div key={i} style={{fontSize: '28px'}}>第 {r.round} 輪：{r.score} 分</div>)}
+            </div>
+            <h2 style={{fontSize: '64px', color: COLORS.green, marginBottom: '30px'}}>總分：{total}</h2>
             <button style={{...startBtn, background: COLORS.red}} onClick={resetSystem}>重新開始</button>
           </div>
           {volumeComp}
@@ -233,8 +237,8 @@ function ProjectorView({ roomData, resetSystem, volumeComp }) {
     return (
       <div style={lobbyContainer}>
         <div style={glassCard}>
-          <h1 style={{fontSize: '28px', color: COLORS.red}}>{roomData.state === 'ROUND_END' ? `第 ${roomData.currentRound} 輪結束` : "準備就緒"}</h1>
-          <h2 style={{margin: '20px 0', color: COLORS.green, fontSize: '40px'}}>第 {roomData.state === 'ROUND_END' ? roomData.currentRound + 1 : roomData.currentRound} 輪</h2>
+          <h1 style={{fontSize: '32px', color: COLORS.red}}>{roomData.state === 'ROUND_END' ? `第 ${roomData.currentRound} 輪結束` : "準備就緒"}</h1>
+          <h2 style={{margin: '30px 0', color: COLORS.green, fontSize: '60px'}}>第 {roomData.state === 'ROUND_END' ? roomData.currentRound + 1 : roomData.currentRound} 輪</h2>
           <button style={{...startBtn, background: COLORS.green}} onClick={async () => {
             if(roomData.state === 'ROUND_END') await update(ref(db, `rooms/${ROOM_ID}`), { currentRound: roomData.currentRound + 1 });
             startRound();
@@ -254,7 +258,7 @@ function ProjectorView({ roomData, resetSystem, volumeComp }) {
       <div style={topBar}>
         <div style={infoText}>{roomData.category} | RD {roomData.currentRound}</div>
         <div style={{...infoText, color: roomData.timeLeft <= 10 ? '#fff' : COLORS.gold}}>⏳ {roomData.timeLeft}s</div>
-        <div style={{...infoText, color: COLORS.green}}>SCORE: {roomData.score}</div>
+        <div style={{...infoText, color: COLORS.green, fontWeight: '900'}}>SCORE: {roomData.score}</div>
         {isReview && <button style={confirmBtn} onClick={async () => {
           const newScores = [...(roomData.roundScores || []), { round: roomData.currentRound, score: roomData.score }];
           const newUsedIds = [...(roomData.usedIds || []), ...roomData.queue.slice(0, roomData.currentIndex).map(q => q.id)];
@@ -263,24 +267,31 @@ function ProjectorView({ roomData, resetSystem, volumeComp }) {
         <button style={resetSmallBtn} onClick={resetSystem}>RESET</button>
       </div>
       <div style={mainContent}>
-        <div style={sideColumnRed}>
-          <h3 style={columnTitle}>正確</h3>
+        {/* 左側正確：寬度增加，字體放大 */}
+        <div style={sideColumnRedPC}>
+          <h3 style={columnTitlePC}>正確</h3>
           <div style={listScroll}>
             {[...(roomData.history || [])].map((h, i) => h.type === '正確' && (
-              <div key={i} style={listItemWhite} onClick={() => toggleItem(i)}>{h.q}</div>
+              <div key={i} style={listItemWhitePC} onClick={() => toggleItem(i)}>{h.q}</div>
             )).reverse()}
           </div>
         </div>
-        <div style={centerColumn}>
-          <div style={{fontSize: '24px', color: COLORS.red}}>{currentQ?.category}</div>
-          <h1 style={mainTermStyle(currentQ?.term || "")}>{currentQ?.term}</h1>
-          {isReview && <div style={{color: COLORS.red, fontSize: '20px', marginTop: '20px'}}>核對模式：點擊可修正</div>}
+
+        {/* 中間題目：加入 max-width 與 padding 保護文字不越位 */}
+        <div style={centerColumnPC}>
+          <div style={{fontSize: '36px', color: COLORS.red, marginBottom: '20px', fontWeight: 'bold'}}>{currentQ?.category}</div>
+          <div style={mainTermContainer}>
+            <h1 style={mainTermStylePC(currentQ?.term || "")}>{currentQ?.term}</h1>
+          </div>
+          {isReview && <div style={{color: COLORS.red, fontSize: '28px', marginTop: '30px', fontWeight: 'bold'}}>核對模式：點擊兩側可修正</div>}
         </div>
-        <div style={sideColumnRed}>
-          <h3 style={columnTitle}>跳過</h3>
+
+        {/* 右側跳過 */}
+        <div style={sideColumnRedPC}>
+          <h3 style={columnTitlePC}>跳過</h3>
           <div style={listScroll}>
             {[...(roomData.history || [])].map((h, i) => h.type === '跳過' && (
-              <div key={i} style={listItemWhite} onClick={() => toggleItem(i)}>{h.q}</div>
+              <div key={i} style={listItemWhitePC} onClick={() => toggleItem(i)}>{h.q}</div>
             )).reverse()}
           </div>
         </div>
@@ -303,8 +314,8 @@ function PlayerView({ roomDataRef, volumeComp }) {
   const data = roomDataRef.current;
   if (!data || data.state !== 'PLAYING') return (
     <div style={layoutStyleMobile}>
-      <h2>⏳ 等待開始...</h2>
-      <p style={{fontSize: '18px'}}>範圍：{data?.category || '未定'}</p>
+      <h2>⏳ 等待中</h2>
+      <p>範圍：{data?.category || '未定'}</p>
       {volumeComp}
     </div>
   );
@@ -321,45 +332,48 @@ function PlayerView({ roomDataRef, volumeComp }) {
   );
 }
 
-// --- 4. 響應式樣式設定 ---
+// --- 4. 樣式系統 ---
 const lobbyContainer = { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: COLORS.cream, position: 'relative', padding: '10px' };
-const glassCard = { background: '#fff', padding: '30px 20px', borderRadius: '30px', boxShadow: '0 15px 35px rgba(0,0,0,0.05)', textAlign: 'center', width: '100%', maxWidth: '450px', border: `3px solid ${COLORS.gold}`, boxSizing: 'border-box' };
-
-// 手機標題縮小
-const responsiveMainTitle = { 
-  fontSize: 'min(15vw, 80px)', 
-  fontWeight: '900', 
-  color: COLORS.red, 
-  marginBottom: '30px', 
-  letterSpacing: '5px' 
-};
-
-const subTitle = { fontSize: '24px', marginBottom: '20px', color: COLORS.text, fontWeight: 'bold' };
-const gridContainer = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' };
-
-// 按鈕大小優化
-const roleBtn = { padding: '15px 10px', fontSize: '18px', borderRadius: '15px', border: `2px solid ${COLORS.gold}`, background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: COLORS.text, fontFamily: FONT_FAMILY };
-const categoryGridBtn = { ...roleBtn, fontSize: '16px' };
+const glassCard = { background: '#fff', padding: '40px', borderRadius: '30px', boxShadow: '0 15px 35px rgba(0,0,0,0.05)', textAlign: 'center', width: '90%', maxWidth: '500px', border: `3px solid ${COLORS.gold}`, boxSizing: 'border-box' };
+const responsiveMainTitle = { fontSize: 'min(15vw, 90px)', fontWeight: '900', color: COLORS.red, marginBottom: '30px', letterSpacing: '5px' };
+const subTitle = { fontSize: '28px', marginBottom: '20px', color: COLORS.text, fontWeight: 'bold' };
+const gridContainer = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '20px' };
+const roleBtn = { padding: '20px', fontSize: '20px', borderRadius: '15px', border: `2px solid ${COLORS.gold}`, background: '#fff', cursor: 'pointer', fontWeight: 'bold', color: COLORS.text, fontFamily: FONT_FAMILY };
+const categoryGridBtn = { ...roleBtn, padding: '15px 5px', fontSize: '18px' };
 const roleBtnDisabled = { ...roleBtn, background: '#eee', color: '#aaa', cursor: 'not-allowed', border: 'none' };
-const startBtn = { padding: '15px', fontSize: '22px', borderRadius: '20px', border: 'none', background: COLORS.gold, color: COLORS.text, fontWeight: 'bold', cursor: 'pointer', width: '100%' };
-const backLink = { background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px', marginTop: '10px' };
+const startBtn = { padding: '18px', fontSize: '24px', borderRadius: '20px', border: 'none', background: COLORS.gold, color: COLORS.text, fontWeight: 'bold', cursor: 'pointer', width: '100%' };
+const backLink = { background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px', marginTop: '10px' };
 const adminEntryBtn = { position: 'absolute', bottom: '10px', left: '10px', background: 'none', border: 'none', fontSize: '14px', cursor: 'pointer', opacity: 0.3 };
 
-const gameScreenStyle = { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: COLORS.cream };
-const topBar = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 20px', background: COLORS.text, color: '#fff' };
-const infoText = { fontSize: '18px', fontWeight: 'bold' };
+// PC 遊戲畫面樣式
+const gameScreenStyle = { display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: COLORS.cream, overflow: 'hidden' };
+const topBar = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 40px', background: COLORS.text, color: '#fff' };
+const infoText = { fontSize: '32px', fontWeight: 'bold' };
 const mainContent = { display: 'flex', flex: 1, overflow: 'hidden' };
-const sideColumnRed = { width: '18%', padding: '10px', background: COLORS.red, display: 'flex', flexDirection: 'column', color: '#fff' };
-const columnTitle = { fontSize: '16px', borderBottom: '1px solid rgba(255,255,255,0.3)', paddingBottom: '5px', textAlign: 'center' };
-const centerColumn = { width: '64%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 10px' };
-const mainTermStyle = (text) => ({ fontSize: text.length > 8 ? 'min(8vw, 80px)' : 'min(12vw, 140px)', whiteSpace: 'nowrap', fontWeight: '900', color: COLORS.text, margin: 0, textAlign: 'center' });
-const listScroll = { flex: 1, overflowY: 'auto' };
-const listItemWhite = { fontSize: '16px', padding: '8px', margin: '5px 0', borderRadius: '6px', cursor: 'pointer', backgroundColor: 'rgba(255,255,255,0.15)', color: '#fff', textAlign: 'left' };
-const resetSmallBtn = { padding: '5px', background: 'transparent', border: '1px solid #555', color: '#888', borderRadius: '4px', fontSize: '10px' };
-const confirmBtn = { padding: '8px 12px', background: COLORS.gold, border: 'none', borderRadius: '6px', fontSize: '14px', fontWeight: 'bold' };
+
+// 左右欄位：加寬到 20%，字體加粗加大
+const sideColumnRedPC = { width: '20%', padding: '20px', background: COLORS.red, display: 'flex', flexDirection: 'column', color: '#fff', boxSizing: 'border-box' };
+const columnTitlePC = { fontSize: '28px', borderBottom: '3px solid rgba(255,255,255,0.3)', paddingBottom: '10px', textAlign: 'center', fontWeight: 'bold', marginBottom: '15px' };
+const listItemWhitePC = { fontSize: '28px', padding: '15px', margin: '10px 0', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'rgba(255,255,255,0.15)', color: '#fff', textAlign: 'left', fontWeight: 'bold' };
+
+// 中間區域：加入強力的文字溢出防護
+const centerColumnPC = { width: '60%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 40px', boxSizing: 'border-box' };
+const mainTermContainer = { width: '100%', overflow: 'hidden', textAlign: 'center' };
+const mainTermStylePC = (text) => ({ 
+  // 針對字數進行動態字體調整，並限制最大寬度
+  fontSize: text.length > 7 ? '90px' : text.length > 5 ? '120px' : '170px', 
+  whiteSpace: 'nowrap', 
+  fontWeight: '900', 
+  color: COLORS.text, 
+  margin: 0,
+  lineHeight: '1.2'
+});
 
 const layoutStyleMobile = { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center', background: COLORS.cream, position: 'relative', padding: '20px', boxSizing: 'border-box' };
-const controlBtn = { padding: '30px 0', fontSize: '28px', border: 'none', borderRadius: '20px', color: '#fff', fontWeight: 'bold', width: '100%', fontFamily: FONT_FAMILY };
+const controlBtn = { padding: '35px 0', fontSize: '32px', border: 'none', borderRadius: '25px', color: '#fff', fontWeight: 'bold', width: '100%', fontFamily: FONT_FAMILY };
+const inputStyle = { padding: '8px', borderRadius: '8px', border: `2px solid ${COLORS.gold}`, width: '70px', textAlign: 'center', fontSize: '18px' };
 const settingRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '10px 0', width: '100%' };
-const inputStyle = { padding: '8px', borderRadius: '8px', border: `2px solid ${COLORS.gold}`, width: '70px', textAlign: 'center' };
-const volumeBtnStyle = { position: 'absolute', bottom: '15px', right: '15px', padding: '10px', background: 'rgba(0,0,0,0.05)', border: 'none', borderRadius: '50%', cursor: 'pointer', fontSize: '20px', zIndex: 1000 };
+const volumeBtnStyle = { position: 'absolute', bottom: '15px', right: '15px', padding: '12px', background: 'rgba(0,0,0,0.2)', border: 'none', borderRadius: '50%', cursor: 'pointer', fontSize: '28px', zIndex: 1000, color: '#fff' };
+const listScroll = { flex: 1, overflowY: 'auto' };
+const confirmBtn = { padding: '10px 20px', background: COLORS.gold, border: 'none', borderRadius: '8px', color: COLORS.text, fontWeight: 'bold', cursor: 'pointer' };
+const resetSmallBtn = { padding: '5px 10px', background: 'transparent', border: '1px solid #555', color: '#aaa', borderRadius: '4px', cursor: 'pointer' };
