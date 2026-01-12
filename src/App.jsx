@@ -58,10 +58,10 @@ export default function App() {
 
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.muted = roomData?.isPaused ? true : isMuted;
+      audioRef.current.muted = (roomData?.isPaused || roomData?.state === 'REVIEW') ? true : isMuted;
       audioRef.current.volume = 0.4;
     }
-  }, [isMuted, roomData?.isPaused]);
+  }, [isMuted, roomData?.isPaused, roomData?.state]);
 
   const handleTeacherStart = () => {
     if (!user) {
@@ -145,12 +145,13 @@ export default function App() {
             </div>
             <button style={backLink} onClick={() => setView('SUBJECT')}>← 返回</button>
           </div>
+          <CopyrightFooter />
         </div>
       );
       case 'JOIN_ROOM': return <JoinRoomView setRoomId={setRoomId} setView={setView} />;
       case 'PROJECTOR_SETTINGS': return <ProjectorSettings roomId={roomId} setView={setView} />;
       case 'PROJECTOR_GAME': return <ProjectorGameView roomId={roomId} roomData={roomData} resetToHome={resetToHome} setView={setView} totalSessions={totalSessions} />;
-      case 'PLAYER': return <PlayerView roomId={roomId} roomData={roomData} resetSystem={resetToHome} />;
+      case 'PLAYER': return <PlayerView roomId={roomId} roomData={roomData} setView={setView} resetToHome={resetToHome} />;
       default: return null;
     }
   };
@@ -179,20 +180,21 @@ function JoinRoomView({ setRoomId, setView }) {
       <input type="number" style={{...inputStyle, width:'220px', fontSize:'3.5rem', margin:'30px 0'}} value={code} onChange={e=>setCode(e.target.value)} onFocus={e=>e.target.select()} />
       <button style={startBtn} onClick={handleJoin}>進入挑戰 ➔</button>
       <button style={backLink} onClick={()=>setView('HOME')}>← 返回</button>
-    </div></div>
+    </div><CopyrightFooter /></div>
   );
 }
 
-// --- 投影幕端：初始設定 ---
+// --- 投影幕端：初始設定 (確保鍵盤輸入順暢) ---
 function ProjectorSettings({ roomId, setView }) {
   const [rounds, setRounds] = useState(3);
   const [time, setTime] = useState(180);
   const [dup, setDup] = useState(false);
 
   const saveAndStart = async () => {
-    runTransaction(ref(db, 'stats/totalSessions'), (c) => (c || 0) + 1);
+    const cat = localStorage.getItem('temp_cat') || "全範圍";
     await update(ref(db, `rooms/${roomId}`), {
-      state: 'LOBBY', totalRounds: rounds, timePerRound: time, allowDuplicate: dup, currentRound: 1, score: 0, roundScores: [], usedIds: [], history: []
+      state: 'LOBBY', totalRounds: rounds, timePerRound: time, allowDuplicate: dup, category: cat,
+      currentRound: 1, score: 0, roundScores: [], usedIds: [], history: []
     });
     setView('PROJECTOR_GAME');
   };
@@ -200,20 +202,20 @@ function ProjectorSettings({ roomId, setView }) {
   return (
     <div style={lobbyContainer}><div style={glassCard}>
       <h1 style={{color: COLORS.red, fontSize:'4.5rem', margin:0}}>{roomId}</h1>
-      <p>請學生手機輸入代碼加入</p>
+      <p>學生手機輸入代碼加入</p>
       <div style={{margin:'30px 0', borderTop:'1px solid #eee', paddingTop:'20px'}}>
         <div style={settingRow}><span>總回合數</span>
-          <input key="rounds" type="number" style={inputStyle} value={rounds} onChange={e => setRounds(parseInt(e.target.value) || 0)} onFocus={e => e.target.select()} />
+          <input type="number" style={inputStyle} value={rounds} onChange={e => setRounds(parseInt(e.target.value) || 0)} onFocus={e => e.target.select()} />
         </div>
         <div style={settingRow}><span>每輪秒數</span>
-          <input key="time" type="number" style={inputStyle} value={time} onChange={e => setTime(parseInt(e.target.value) || 0)} onFocus={e => e.target.select()} />
+          <input type="number" style={inputStyle} value={time} onChange={e => setTime(parseInt(e.target.value) || 0)} onFocus={e => e.target.select()} />
         </div>
         <label style={{display:'block', margin:'20px 0', fontSize:'1.2rem', cursor: 'pointer'}}>
           <input type="checkbox" checked={dup} onChange={e=>setDup(e.target.checked)} /> 允許題目重複出現
         </label>
       </div>
       <button style={startBtn} onClick={saveAndStart}>儲存設定並開始</button>
-    </div></div>
+    </div><CopyrightFooter /></div>
   );
 }
 
@@ -229,9 +231,10 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
     return () => clearInterval(timer);
   }, [roomId, roomData?.state, roomData?.timeLeft, roomData?.isPaused]);
 
-  if (!roomData) return <div style={lobbyContainer}><h2>📡 資料同步中...</h2></div>;
+  if (!roomData) return <div style={lobbyContainer}><h2>📡 資料讀取中...</h2></div>;
 
   const startRound = async () => {
+    runTransaction(ref(db, 'stats/totalSessions'), (c) => (c || 0) + 1);
     const snapshot = await get(ref(db, 'question_pool'));
     const pool = Object.values(snapshot.val() || {});
     let filtered = roomData.category === '全範圍' ? pool : pool.filter(q => q.book === roomData.category);
@@ -245,23 +248,13 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
     const newScores = [...(roomData.roundScores || []), { round: roomData.currentRound, score: roomData.score }];
     const newUsedIds = [...(roomData.usedIds || []), ...(roomData.queue?.slice(0, roomData.currentIndex).map(q => q.id) || [])];
     const isGameOver = roomData.currentRound >= roomData.totalRounds;
-    
     const updates = { state: isGameOver ? 'TOTAL_END' : 'ROUND_END', roundScores: newScores, usedIds: newUsedIds, isPaused: false };
     if (!isGameOver) updates.currentRound = roomData.currentRound + 1;
     await update(ref(db, `rooms/${roomId}`), updates);
   };
 
-  // --- 邏輯修正：重新遊戲 (不換房、不換設定) ---
-  const handleRestartGame = async () => {
-    await update(ref(db, `rooms/${roomId}`), {
-      state: 'LOBBY', currentRound: 1, score: 0, roundScores: [], usedIds: [], history: []
-    });
-  };
-
-  // --- 邏輯修正：重選範圍 (不換房、重選科目) ---
-  const handleReselectRange = async () => {
-    await update(ref(db, `rooms/${roomId}`), { state: 'SETTINGS' });
-    setView('CATEGORY');
+  const handleRestart = async () => {
+    await update(ref(db, `rooms/${roomId}`), { state: 'LOBBY', currentRound: 1, score: 0, roundScores: [], usedIds: [], history: [] });
   };
 
   if (roomData.state === 'LOBBY' || roomData.state === 'ROUND_END' || roomData.state === 'TOTAL_END') {
@@ -271,31 +264,31 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
           <h1>房間代碼：<span style={{color:COLORS.red}}>{roomId}</span></h1>
           {roomData.state === 'TOTAL_END' ? (
             <div>
-              <h1 style={{color:COLORS.red, fontSize: '3rem'}}>🏆 最終結算</h1>
+              <h1 style={{color:COLORS.red, fontSize: '3.5rem'}}>🏆 最終結算</h1>
               <div style={{margin: '30px 0'}}>
                  {roomData.roundScores?.map((r,i)=>(
-                   <div key={i} style={{fontSize:'32px', fontWeight:'bold', margin: '12px 0'}}>第 {r.round} 輪：{r.score} 分</div>
+                   <div key={i} style={{fontSize:'32px', fontWeight:'bold', margin: '10px 0'}}>第 {r.round} 輪：{r.score} 分</div>
                  ))}
               </div>
               <h2 style={{fontSize:'64px', color:COLORS.green, borderTop: '2px solid #eee', paddingTop: '20px'}}>總分：{total}</h2>
             </div>
           ) : (
             <div style={{margin: '40px 0'}}>
-                <h1 style={{fontSize: '60px', color: COLORS.green, margin: 0}}>準備就緒</h1>
-                <h2 style={{fontSize: '40px', color: COLORS.text}}>(第 {roomData.currentRound} 輪)</h2>
+                <h1 style={{fontSize: '60px', color: COLORS.green, margin: 0, lineHeight: 1.2}}>準備就緒</h1>
+                <h2 style={{fontSize: '40px', color: COLORS.text, marginTop: '10px'}}>(第 {roomData.currentRound} 輪)</h2>
             </div>
           )}
-          
           <div style={mobileVerticalGrid}>
-            {roomData.state === 'TOTAL_END' ? (
-                <>
-                    <button style={startBtn} onClick={handleRestartGame}>重新遊戲</button>
-                    <button style={{...startBtn, background: COLORS.green}} onClick={handleReselectRange}>重選範圍</button>
-                </>
-            ) : (
-                <button style={startBtn} onClick={startRound}>開始挑戰</button>
+            <button style={startBtn} onClick={roomData.state === 'TOTAL_END' ? handleRestart : startRound}>
+               {roomData.state === 'TOTAL_END' ? "重新遊戲" : "開始挑戰"}
+            </button>
+            {roomData.state === 'TOTAL_END' && (
+              <button style={{...startBtn, background: COLORS.green}} onClick={async () => {
+                await update(ref(db, `rooms/${roomId}`), { state: 'SETTINGS' });
+                setView('CATEGORY');
+              }}>重選範圍</button>
             )}
-            <button style={{...backLink, fontSize: '1.5rem'}} onClick={resetToHome}>回首頁</button>
+            <button style={{...backLink, fontSize: '1.5rem', marginTop: '20px'}} onClick={resetToHome}>回首頁</button>
           </div>
       </div><CopyrightFooter /></div>
     );
@@ -325,11 +318,16 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
       <div style={mainContent}>
         <div style={sideColumnPC}><h3 style={columnTitlePC}>正確</h3><div style={listScroll}>{(roomData.history || []).map((h, i) => h.type === '正確' && (<div key={i} style={listItemWhitePC} onClick={() => updateHistory(roomId, roomData, i)}>✓ {h.q}</div>)).reverse()}</div></div>
         <div style={centerColumnPC}>
-          {roomData.isPaused ? <h1 style={{fontSize:'100px', color:COLORS.gold}}>暫停中</h1> : <>
-            <div style={{fontSize:'32px', color:COLORS.red, marginBottom:'10px', fontWeight:'bold'}}>{currentQ?.category}</div>
-            <div style={mainTermContainer}><h1 style={mainTermStylePC(currentQ?.term || "")}>{currentQ?.term}</h1></div>
-            {isReview && <div style={{color:COLORS.red, fontSize:'28px', marginTop:'30px', fontWeight:'bold'}}>核對模式：可點擊清單修正</div>}
-          </>}
+          {isReview ? (
+             <div style={{textAlign: 'center'}}><h1 style={{fontSize: '120px', color: COLORS.red}}>Time's up!</h1><h2 style={{fontSize: '40px', color: COLORS.text}}>時間到，請核對清單</h2></div>
+          ) : roomData.isPaused ? (
+             <h1 style={{fontSize:'100px', color:COLORS.gold}}>暫停中</h1>
+          ) : (
+            <>
+              <div style={{fontSize:'32px', color:COLORS.red, marginBottom:'10px', fontWeight:'bold'}}>{currentQ?.category}</div>
+              <div style={mainTermContainer}><h1 style={mainTermStylePC(currentQ?.term || "")}>{currentQ?.term}</h1></div>
+            </>
+          )}
         </div>
         <div style={sideColumnPC}><h3 style={columnTitlePC}>跳過</h3><div style={listScroll}>{(roomData.history || []).map((h, i) => h.type === '跳過' && (<div key={i} style={listItemWhitePC} onClick={() => updateHistory(roomId, roomData, i)}>✘ {h.q}</div>)).reverse()}</div></div>
       </div>
@@ -345,7 +343,7 @@ const updateHistory = (rid, data, idx) => {
   update(ref(db, `rooms/${rid}`), { history: newH, score: newH.filter(h=>h.type==='正確').length });
 };
 
-// --- 控制器端：自動等待邏輯 ---
+// --- 控制器端 ---
 function PlayerView({ roomId, roomData, resetToHome }) {
   const submit = async (type) => {
     if (!roomData || roomData.state !== 'PLAYING' || roomData.isPaused) return;
@@ -355,11 +353,11 @@ function PlayerView({ roomId, roomData, resetToHome }) {
     await update(ref(db, `rooms/${roomId}`), { currentIndex: nextIdx, score: type === '正確' ? roomData.score + 1 : roomData.score, history: newH });
   };
   if (!roomData) return <div style={layoutStyleMobile}><h2>📡 連線中...</h2></div>;
+  if (roomData.state === 'REVIEW') return <div style={{...layoutStyleMobile, background: COLORS.red, color: '#fff'}}><h1 style={{fontSize: '5rem'}}>Time's up!</h1><p style={{fontSize: '2rem'}}>時間到，請看大螢幕</p></div>;
   if (roomData.state !== 'PLAYING') return (
     <div style={layoutStyleMobile}>
         <h2 style={{color:COLORS.red, fontSize: '2rem'}}>{roomData.state === 'TOTAL_END' ? "🏆 挑戰結束" : "⏳ 等待老師啟動"}</h2>
         <p style={{fontSize: '1.2rem'}}>房號：{roomId} | 範圍：{roomData.category}</p>
-        <p>目前進度：第 {roomData.currentRound} / {roomData.totalRounds} 輪</p>
         <button style={{...backLink, marginTop: '50px'}} onClick={resetToHome}>返回首頁</button>
     </div>
   );
@@ -401,20 +399,20 @@ function AdminView({ onBack }) {
 }
 
 // --- 樣式設定 ---
-const lobbyContainer = { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:COLORS.cream, position:'relative', padding:'20px', boxSizing:'border-box', textAlign:'center' };
+const lobbyContainer = { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:COLORS.cream, position:'relative', padding:'20px 20px 80px 20px', boxSizing:'border-box', textAlign:'center' };
 const glassCard = { background:'#fff', padding:'30px 20px', borderRadius:'30px', boxShadow:'0 20px 50px rgba(0,0,0,0.05)', textAlign:'center', width:'95%', maxWidth:'500px', border:`4px solid ${COLORS.gold}`, boxSizing:'border-box' };
 const titleContainer = { width:'100%', overflow:'hidden', display:'flex', justifyContent:'center', marginBottom:'30px' };
 const responsiveTitle = { fontSize:'clamp(2.5rem, 10vw, 5rem)', fontWeight:'900', color:COLORS.red, letterSpacing:'10px', margin:0 };
 const subTitle = { fontSize:'2rem', marginBottom:'25px', color:COLORS.text, fontWeight:'bold' };
 const mobileGrid = { display:'grid', gridTemplateColumns:'1fr 1fr', gap:'15px', marginBottom:'25px' };
-const mobileVerticalGrid = { display:'flex', flexDirection:'column', gap:'15px', marginBottom:'25px', width: '100%' };
+const mobileVerticalGrid = { display:'flex', flexDirection:'column', gap:'15px', marginBottom:'25px', width:'100%' };
 const roleBtnCard = { display:'flex', alignItems:'center', padding:'20px', fontSize:'1.4rem', borderRadius:'20px', border:`2px solid ${COLORS.gold}`, background:'#fff', cursor:'pointer', fontWeight:'bold', color:COLORS.text, fontFamily:FONT_FAMILY };
 const iconLarge = { fontSize:'2.5rem', marginRight:'15px' };
 const roleBtnDisabled = { ...roleBtnCard, background:'#eee', color:'#aaa', cursor:'not-allowed', border:'none' };
 const catBtnMobile = { padding:'15px', fontSize:'1.2rem', borderRadius:'15px', border:`2px solid ${COLORS.gold}`, background:'#fff', fontWeight:'bold', color:COLORS.text, fontFamily:FONT_FAMILY };
 const catBtnDisabled = { ...catBtnMobile, background:'#eee', color:'#aaa', cursor:'not-allowed', border:'none' };
 const startBtn = { padding:'20px', fontSize:'1.8rem', borderRadius: '20px', border:'none', background: COLORS.gold, color: COLORS.text, fontWeight: 'bold', cursor: 'pointer', width: '100%', fontFamily: FONT_FAMILY };
-const backLink = { background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1.1rem', marginTop: '15px' };
+const backLink = { background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1.1rem', marginTop: '10px' };
 const adminEntryBtn = { position:'absolute', bottom:'30px', left:'30px', background: 'none', border: 'none', display: 'flex', alignItems: 'center', cursor: 'pointer' };
 const gameScreenStyle = { display:'flex', flexDirection:'column', height:'100vh', backgroundColor:COLORS.cream, overflow:'hidden' };
 const topBar = { display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 40px', background:COLORS.text, color:'#fff' };
@@ -423,21 +421,21 @@ const mainContent = { display:'flex', flex:1, overflow:'hidden' };
 const sideColumnPC = { width:'15%', padding:'20px', background:COLORS.red, display:'flex', flexDirection:'column', color:'#fff', boxSizing:'border-box' };
 const columnTitlePC = { fontSize:'28px', borderBottom: '3px solid rgba(255,255,255,0.3)', paddingBottom: '10px', textAlign: 'center', fontWeight: 'bold', marginBottom: '15px' };
 const listItemWhitePC = { fontSize: '28px', padding: '15px', margin: '10px 0', borderRadius: '10px', cursor: 'pointer', backgroundColor: 'rgba(255,255,255,0.15)', color: '#fff', textAlign: 'left', fontWeight: 'bold' };
-const centerColumnPC = { width:'70%', display:'flex', flexDirection:'column', alignItems: 'center', justifyContent: 'center', padding: '0 80px', boxSizing: 'border-box' };
-const mainTermContainer = { width:'100%', overflow:'hidden', textAlign: 'center' };
+const centerColumnPC = { width:'70%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent: 'center', padding: '0 80px', boxSizing: 'border-box' };
+const mainTermContainer = { width:'100%', overflow:'hidden', textAlign:'center' };
 const mainTermStylePC = (t) => ({ fontSize: t.length > 12 ? '65px' : t.length > 8 ? '85px' : t.length > 5 ? '120px' : '170px', whiteSpace:'nowrap', fontWeight:'900', color:COLORS.text, margin:0 });
-const layoutStyleMobile = { display:'flex', flexDirection:'column', height:'100vh', width:'100vw', background:COLORS.cream, padding:'0 20px', boxSizing:'border-box', textAlign:'center', justifyContent:'flex-start' };
-const mobileHeader = { fontSize:'1.5rem', color:COLORS.red, fontWeight:'bold', margin:'30px 0 10px 0' };
+const layoutStyleMobile = { display:'flex', flexDirection:'column', height:'100vh', width:'100vw', background:COLORS.cream, padding:'0 20px', boxSizing:'border-box', textAlign:'center', justifyContent:'flex-start', paddingTop: '100px' };
+const mobileHeader = { fontSize:'1.5rem', color:COLORS.red, fontWeight:'bold', margin:'0 0 20px 0' };
 const mobileTermCard = { height:'35vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#fff', borderRadius:'25px', border:`3px solid ${COLORS.gold}`, margin:'10px 0', padding:'20px', width:'100%', boxSizing:'border-box' };
 const mobileTermText = { fontSize:'clamp(2rem, 12vw, 3.5rem)', color:COLORS.text, margin:0, fontWeight:'900' };
 const mobileButtonArea = { display:'flex', flexDirection:'column', gap:'15px', marginTop:'10px', width:'100%' };
 const mobileActionBtn = { padding:'25px 0', fontSize:'2.5rem', borderRadius:'20px', border:'none', color:'#fff', fontWeight:'bold', cursor:'pointer', boxShadow:'0 5px 15px rgba(0,0,0,0.1)' };
 const volumeBtnStyle = { position:'fixed', bottom:'15px', right:'15px', width: '55px', height: '55px', background:'white', border:`2px solid ${COLORS.gold}`, borderRadius:'50%', cursor:'pointer', padding:'10px', zIndex:2000, boxShadow:'0 4px 10px rgba(0,0,0,0.1)' };
 const pauseIconBtn = { background:'none', border:'none', cursor:'pointer' };
-const resetSmallBtn = { padding: '5px 10px', background: 'transparent', border: '1px solid #555', color: '#888', borderRadius: '4px', cursor: 'pointer' };
-const confirmBtn = { padding:'10px 20px', background:COLORS.gold, border: 'none', borderRadius: '8px', color: COLORS.text, fontWeight: 'bold', cursor: 'pointer' };
+const resetSmallBtn = { padding: '5px 10px', background: 'transparent', border: '1px solid #555', color: '#aaa', borderRadius: '4px', cursor: 'pointer' };
+const confirmBtn = { padding: '10px 20px', background: COLORS.gold, border: 'none', borderRadius: '8px', color: COLORS.text, fontWeight: 'bold', cursor: 'pointer' };
 const inputStyle = { padding: '12px', borderRadius: '10px', border: `2px solid ${COLORS.gold}`, width: '150px', textAlign: 'center', fontSize: '1.8rem', backgroundColor: '#fff', color: COLORS.text };
 const settingRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0', width: '100%', fontSize: '1.3rem', fontWeight: 'bold' };
 const listScroll = { flex: 1, overflowY: 'auto' };
-const footerStyle = { position:'absolute', bottom:'30px', width:'100%', textAlign:'center', fontSize:'12px', color:COLORS.text, opacity:0.5, pointerEvents:'none' };
+const footerStyle = { position:'absolute', bottom:'20px', width:'100%', textAlign:'center', fontSize:'12px', color:COLORS.text, opacity:0.5, pointerEvents:'none' };
 const userCounterStyle = { textAlign:'right', borderLeft:'1px solid rgba(255,255,255,0.2)', paddingLeft:'15px' };
