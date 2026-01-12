@@ -41,11 +41,12 @@ export default function App() {
     return auth.onAuthStateChanged(u => setUser(u));
   }, [auth]);
 
+  // 監聽題庫分類 (加入防崩潰保護)
   useEffect(() => {
     onValue(ref(db, 'question_pool'), (snapshot) => {
-      if (snapshot.exists()) {
-        const pool = snapshot.val();
-        const poolArray = Array.isArray(pool) ? pool : Object.values(pool);
+      const pool = snapshot.val() || {};
+      const poolArray = Array.isArray(pool) ? pool : Object.values(pool);
+      if (poolArray.length > 0) {
         setAvailableCats([...new Set(poolArray.map(item => String(item.book || "").trim()))]);
       }
     });
@@ -65,8 +66,7 @@ export default function App() {
 
   const handleTeacherStart = () => {
     if (!user) {
-      const provider = new GoogleAuthProvider();
-      signInWithPopup(auth, provider).then(() => setView('SUBJECT')).catch(() => alert("登入失敗"));
+      signInWithPopup(auth, new GoogleAuthProvider()).then(() => setView('SUBJECT')).catch(() => {});
     } else {
       setView('SUBJECT');
     }
@@ -114,7 +114,7 @@ export default function App() {
                 </button>
             </div>
             {user && (
-              <p style={{marginTop: '15px', fontSize: '14px'}}>
+              <p style={{marginTop: '20px', fontSize: '16px'}}>
                 {user.displayName} <span style={{cursor:'pointer', color:COLORS.red, textDecoration:'underline', marginLeft:'10px'}} onClick={()=>signOut(auth)}>登出</span>
               </p>
             )}
@@ -185,7 +185,7 @@ function JoinRoomView({ setRoomId, setView, resetToHome }) {
     if (code.length < 4) return;
     const s = await get(ref(db, `rooms/${code}`));
     if (s.exists()) { setRoomId(code); setView('PLAYER'); }
-    else alert("找不到該房間！");
+    else alert("找不到代碼！");
   };
   return (
     <div style={lobbyContainer}><div style={glassCard}>
@@ -197,7 +197,7 @@ function JoinRoomView({ setRoomId, setView, resetToHome }) {
   );
 }
 
-// --- 初始設定 (解決輸入鎖定) ---
+// --- 投影幕端：初始設定 ---
 function ProjectorSettings({ roomId, setView }) {
   const [rounds, setRounds] = useState(3);
   const [time, setTime] = useState(180);
@@ -230,7 +230,7 @@ function ProjectorSettings({ roomId, setView }) {
   );
 }
 
-// --- 投影幕遊戲畫面 ---
+// --- 投影幕端：遊戲主畫面 ---
 function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessions }) {
   useEffect(() => {
     let timer;
@@ -242,7 +242,7 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
     return () => clearInterval(timer);
   }, [roomId, roomData?.state, roomData?.timeLeft, roomData?.isPaused]);
 
-  if (!roomData) return <div style={lobbyContainer}><h2>📡 資料讀取中...</h2></div>;
+  if (!roomData) return <div style={lobbyContainer}><h2>📡 資料同步中...</h2></div>;
 
   const startRound = async () => {
     runTransaction(ref(db, 'stats/totalSessions'), (c) => (c || 0) + 1);
@@ -273,7 +273,7 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
           {roomData.state === 'TOTAL_END' ? (
             <div>
               <h1 style={{color:COLORS.red, fontSize: '3rem', marginBottom: '5px'}}>🏆 最終結算</h1>
-              <div style={{margin: '10px 0', maxHeight: '250px', overflowY: 'auto'}}>
+              <div style={{margin: '10px 0', maxHeight: '200px', overflowY: 'auto'}}>
                  {roomData.roundScores?.map((r,i)=>{
                    const s = r.score < 10 ? `\u00A0${r.score}` : r.score;
                    return <div key={i} style={{fontSize:'32px', fontWeight:'bold', margin: '4px 0'}}>第 {r.round} 輪：{s} 分</div>
@@ -283,12 +283,12 @@ function ProjectorGameView({ roomId, roomData, resetToHome, setView, totalSessio
             </div>
           ) : (
             <div style={{margin: '30px 0'}}>
-                <h1 style={{fontSize: '56px', color: COLORS.green, margin: 0, lineHeight: 1.2}}>準備就緒</h1>
+                <h1 style={{fontSize: '60px', color: COLORS.green, margin: 0, lineHeight: 1.2}}>準備就緒</h1>
                 <h2 style={{fontSize: '32px', color: COLORS.text, marginTop: '10px', fontWeight: 'normal'}}>(第 {roomData.currentRound} 輪)</h2>
             </div>
           )}
           <div style={mobileVerticalGrid}>
-            <button style={startBtn} onClick={roomData.state === 'TOTAL_END' ? (()=>update(ref(db,`rooms/${roomId}`),{state:'LOBBY',currentRound:1,score:0,roundScores:[],usedIds:[],history:[]})) : startRound}>
+            <button style={startBtn} onClick={roomData.state === 'TOTAL_END' ? (()=>update(ref(db,`rooms/${roomId}`),{state:'SETTINGS'})) : startRound}>
                {roomData.state === 'TOTAL_END' ? "重新遊戲" : "開始挑戰"}
             </button>
             {roomData.state === 'TOTAL_END' && <button style={{...startBtn, background: COLORS.green}} onClick={()=>{update(ref(db,`rooms/${roomId}`),{state:'SETTINGS'});setView('CATEGORY')}}>重選範圍</button>}
@@ -390,16 +390,16 @@ function AdminView({ onBack }) {
         const json = XLSX.utils.sheet_to_json(workbook.Sheets[n]);
         all = [...all, ...json.map(i => ({ id: i['序號']||Math.random(), term: String(i['名詞']||''), book: String(i['分冊']||'').trim() }))];
       });
-      set(ref(db, 'question_pool'), all).then(() => alert("題庫匯入成功！"));
+      set(ref(db, 'question_pool'), all).then(() => alert("匯入成功！"));
     };
     reader.readAsArrayBuffer(file);
   };
   return <div style={lobbyContainer}><div style={glassCard}><h2>題庫管理</h2><input type="file" onChange={handleFileUpload}/><br/><button style={backLinkButton} onClick={onBack}>← 返回</button></div></div>;
 }
 
-// --- 樣式設定 ---
-const lobbyContainer = { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100vh', background:COLORS.cream, position:'relative', padding:'20px 20px 100px 20px', boxSizing:'border-box', textAlign:'center' };
-const glassCard = { background:'#fff', padding:'30px 20px', borderRadius:'30px', boxShadow:'0 20px 50px rgba(0,0,0,0.05)', textAlign:'center', width:'95%', maxWidth:'500px', border:`4px solid ${COLORS.gold}`, boxSizing:'border-box' };
+// --- 樣式設定 (修正重疊與輸入) ---
+const lobbyContainer = { display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:'100vh', background:COLORS.cream, position:'relative', padding:'40px 20px 120px 20px', boxSizing:'border-box', textAlign:'center' };
+const glassCard = { background:'#fff', padding:'30px 20px', borderRadius:'30px', boxShadow:'0 20px 50px rgba(0,0,0,0.05)', textAlign:'center', width:'95%', maxWidth:'550px', border:`4px solid ${COLORS.gold}`, boxSizing:'border-box', marginBottom: '20px' };
 const titleContainer = { width:'100%', overflow:'hidden', display:'flex', justifyContent:'center', marginBottom:'30px' };
 const responsiveTitle = { fontSize:'clamp(3rem, 12vw, 6rem)', fontWeight:'900', color:COLORS.red, letterSpacing:'10px', margin:0 };
 const responsiveTitleSmall = { fontSize:'clamp(2.5rem, 10vw, 5rem)', fontWeight:'900', color:COLORS.red, letterSpacing:'10px', margin:0 };
@@ -425,7 +425,6 @@ const listItemWhitePC = { fontSize: '28px', padding: '15px', margin: '10px 0', b
 const centerColumnPC = { width:'70%', display:'flex', flexDirection:'column', alignItems:'center', justifyContent: 'center', padding: '0 80px', boxSizing: 'border-box' };
 const mainTermContainer = { width:'100%', overflow:'hidden', textAlign:'center' };
 const mainTermStylePC = (t) => ({ fontSize: t.length > 12 ? '65px' : t.length > 8 ? '85px' : t.length > 5 ? '120px' : '170px', whiteSpace:'nowrap', fontWeight:'900', color:COLORS.text, margin:0 });
-
 const layoutStyleMobile = { display:'flex', flexDirection:'column', height:'100vh', width:'100vw', background:COLORS.cream, padding:'0 20px', boxSizing:'border-box', textAlign:'center', justifyContent:'flex-start', paddingTop: '80px', fontFamily: FONT_FAMILY };
 const mobileHeader = { fontSize:'1.5rem', color:COLORS.red, fontWeight:'bold', margin:'30px 0 10px 0' };
 const mobileTermCard = { height:'35vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#fff', borderRadius:'25px', border:`3px solid ${COLORS.gold}`, margin:'10px 0', padding:'20px', width:'100%', boxSizing:'border-box' };
@@ -435,7 +434,7 @@ const mobileActionBtn = { padding:'25px 0', fontSize:'2.5rem', borderRadius:'20p
 const volumeBtnStyle = { position:'fixed', bottom:'15px', right:'15px', width: '55px', height: '55px', background:'white', border:`2px solid ${COLORS.gold}`, borderRadius:'50%', cursor:'pointer', padding:'10px', zIndex:2000, boxShadow:'0 4px 10px rgba(0,0,0,0.1)' };
 const pauseIconBtn = { background:'none', border:'none', cursor:'pointer' };
 const resetSmallBtn = { padding: '5px 10px', background: 'transparent', border: '1px solid #555', color: '#aaa', borderRadius: '4px', cursor: 'pointer' };
-const confirmBtn = { padding: '10px 20px', background: COLORS.gold, border: 'none', borderRadius: '8px', color: COLORS.text, fontWeight: 'bold', cursor: 'pointer', fontFamily: FONT_FAMILY };
+const confirmBtn = { padding:'10px 20px', background: COLORS.gold, border: 'none', borderRadius: '8px', color: COLORS.text, fontWeight: 'bold', cursor: 'pointer', fontFamily: FONT_FAMILY };
 const inputStyle = { padding: '12px', borderRadius: '10px', border: `2px solid ${COLORS.gold}`, width: '150px', textAlign: 'center', fontSize: '1.8rem', backgroundColor: '#fff', color: COLORS.text, fontFamily: FONT_FAMILY };
 const settingRow = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '20px 0', width: '100%', fontSize: '1.3rem', fontWeight: 'bold' };
 const listScroll = { flex: 1, overflowY: 'auto' };
